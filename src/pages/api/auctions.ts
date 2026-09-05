@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getAuctions, searchItems, getItemMedia, getItemData, getPetIndex } from '../../utils/battlenet';
+import { getTsmRegionMap } from '../../utils/tsm';
 
 let cachedPetIndex: any = null;
 const globalVariantIlvlCache = new Map<string, number | null>();
@@ -598,6 +599,13 @@ export const GET: APIRoute = async ({ request }) => {
             });
         }));
 
+        let tsmMap: Map<number, any> | null = null;
+        try {
+            tsmMap = await getTsmRegionMap('us');
+        } catch (e) {
+            // TSM lookup failure is non-fatal
+        }
+
         const resolvedAuctions = topGroups.map((group: any) => {
             let finalIlvl, iconUrl;
             if (group.isPet) {
@@ -617,6 +625,16 @@ export const GET: APIRoute = async ({ request }) => {
             const top10Cheapest = sortedRealms.slice(0, 10);
             const top10Expensive = [...sortedRealms].sort((a: any, b: any) => b.price - a.price).slice(0, 10);
 
+            const minBuyout = top10Cheapest.length > 0 ? top10Cheapest[0].price : 0;
+            const maxBuyout = top10Expensive.length > 0 ? top10Expensive[0].price : 0;
+            const minBuyoutGold = minBuyout / 10000;
+
+            const tsm = (!group.isPet && tsmMap) ? tsmMap.get(group.itemId) : null;
+            let dealDiscount = 0;
+            if (tsm && tsm.marketValue > 0 && minBuyoutGold > 0 && minBuyoutGold < tsm.marketValue) {
+                dealDiscount = Math.round(((tsm.marketValue - minBuyoutGold) / tsm.marketValue) * 100);
+            }
+
             return {
                 id: group.isPet ? `pet-${group.itemId}-${finalIlvl}` : `${group.itemId}-${finalIlvl}`,
                 itemId: group.itemId,
@@ -626,9 +644,16 @@ export const GET: APIRoute = async ({ request }) => {
                 ilvl: finalIlvl,
                 top10Cheapest,
                 top10Expensive,
-                minBuyout: top10Cheapest.length > 0 ? top10Cheapest[0].price : 0,
-                maxBuyout: top10Expensive.length > 0 ? top10Expensive[0].price : 0,
-                quantity: group.quantity
+                minBuyout,
+                maxBuyout,
+                quantity: group.quantity,
+                tsmStats: tsm ? {
+                    saleRate: tsm.saleRate,
+                    soldPerDay: tsm.soldPerDay,
+                    marketValue: tsm.marketValue,
+                    avgSalePrice: tsm.avgSalePrice,
+                    dealDiscount: dealDiscount >= 15 ? dealDiscount : 0
+                } : null
             };
         });
 
